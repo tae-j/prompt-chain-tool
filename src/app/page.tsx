@@ -721,6 +721,73 @@ export default function AppPage() {
     setSelectedFlavor(null); setSteps([]); loadFlavors()
   }
 
+  async function duplicateFlavor() {
+    if (!selectedFlavor) return
+    const { data: { session } } = await supabase.auth.getSession()
+    const userId = session?.user.id
+
+    // Build unique slug and description
+    const baseSlug = `${selectedFlavor.slug}-copy`
+    const baseDesc = `${selectedFlavor.description} Copy`
+    const existingSlugs = new Set(flavors.map(f => f.slug))
+
+    let newSlug = baseSlug
+    let newDesc = baseDesc
+    if (existingSlugs.has(newSlug)) {
+      let n = 2
+      while (existingSlugs.has(`${baseSlug}-${n}`)) n++
+      newSlug = `${baseSlug}-${n}`
+      newDesc = `${baseDesc} ${n}`
+    }
+
+    // Insert the new flavor
+    const { data: newFlavor, error: flavorErr } = await supabase
+      .from('humor_flavors')
+      .insert({ description: newDesc, slug: newSlug, created_by_user_id: userId, modified_by_user_id: userId })
+      .select()
+      .single()
+
+    if (flavorErr || !newFlavor) {
+      showToast(flavorErr?.message || 'Failed to duplicate flavor', 'error')
+      return
+    }
+
+    // Fetch the original steps in order
+    const { data: originalSteps } = await supabase
+      .from('humor_flavor_steps')
+      .select('*')
+      .eq('humor_flavor_id', selectedFlavor.id)
+      .order('order_by')
+
+    // Insert cloned steps pointing to the new flavor
+    if (originalSteps && originalSteps.length > 0) {
+      const cloned = originalSteps.map(s => ({
+        humor_flavor_id: newFlavor.id,
+        order_by: s.order_by,
+        description: s.description,
+        humor_flavor_step_type_id: s.humor_flavor_step_type_id,
+        llm_temperature: s.llm_temperature,
+        llm_input_type_id: s.llm_input_type_id,
+        llm_output_type_id: s.llm_output_type_id,
+        llm_model_id: s.llm_model_id,
+        llm_system_prompt: s.llm_system_prompt,
+        llm_user_prompt: s.llm_user_prompt,
+        created_by_user_id: userId,
+        modified_by_user_id: userId,
+      }))
+      const { error: stepsErr } = await supabase.from('humor_flavor_steps').insert(cloned)
+      if (stepsErr) {
+        showToast(`Flavor created but steps failed to copy: ${stepsErr.message}`, 'error')
+        await loadFlavors()
+        return
+      }
+    }
+
+    showToast(`Duplicated as "${newDesc}"`, 'success')
+    await loadFlavors()
+    selectFlavor(newFlavor as HumorFlavor)
+  }
+
   async function saveStep(data: Partial<HumorFlavorStep>) {
     const { data: { session } } = await supabase.auth.getSession()
     const userId = session?.user.id
@@ -940,6 +1007,7 @@ export default function AppPage() {
               {/* Actions */}
               <div style={{ display: 'flex', gap: '5px', flexShrink: 0 }}>
                 <button className="btn btn-ghost btn-sm" onClick={() => { setEditingFlavor(selectedFlavor); setModal('flavor') }}>✏️ Edit</button>
+                <button className="btn btn-ghost btn-sm" onClick={duplicateFlavor}>⎘ Duplicate</button>
                 <button className="btn btn-ghost btn-sm" onClick={() => setModal('test')}>🧪 Test</button>
                 <button className="btn btn-danger btn-sm" onClick={() => setModal('delete-flavor')}>🗑</button>
               </div>
